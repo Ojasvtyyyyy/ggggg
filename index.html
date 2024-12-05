@@ -1254,7 +1254,6 @@
         async function addSessionLog(start, end, isBreak = false) {
             const duration = Math.round((end - start) / (1000 * 60)); // Duration in minutes
             
-            // Save to Firebase first
             try {
                 await addDoc(collection(db, "sessions"), {
                     startTime: start.toISOString(),
@@ -1266,12 +1265,8 @@
                 });
 
                 // Update longest session if this is not a break
-                if (!isBreak && duration > longestSessionDuration) {
-                    longestSessionDuration = duration;
-                    if (document.getElementById('longestSession')) {
-                        document.getElementById('longestSession').textContent = (duration / 60).toFixed(1);
-                    }
-                    await saveStopwatchState();
+                if (!isBreak) {
+                    await updateLongestSession(duration);
                 }
 
                 // Refresh the sessions display
@@ -1392,6 +1387,7 @@
 
         async function loadStopwatchState() {
             try {
+                // Load stopwatch state
                 const stateRef = doc(db, "stopwatchState", "current");
                 const stateDoc = await getDoc(stateRef);
                 
@@ -1400,18 +1396,29 @@
                     if (state.startTime) startTime = new Date(state.startTime);
                     if (state.lastEndTime) lastEndTime = new Date(state.lastEndTime);
                     isRunning = state.isRunning;
-                    longestSessionDuration = state.longestSessionDuration;
+                }
 
-                    // Resume stopwatch if it was running
-                    if (isRunning) {
-                        stopwatchButton.textContent = 'End Session';
-                        stopwatchButton.classList.add('danger');
-                        stopwatchInterval = setInterval(() => {
-                            const now = new Date();
-                            const diffMinutes = Math.floor((now - startTime) / (1000 * 60));
-                            updateStopwatchDisplay(diffMinutes);
-                        }, 1000);
+                // Load today's longest session
+                const today = new Date().toISOString().split('T')[0];
+                const statsRef = doc(db, "dailyStats", today);
+                const statsDoc = await getDoc(statsRef);
+                
+                if (statsDoc.exists()) {
+                    longestSessionDuration = statsDoc.data().longestSession || 0;
+                    if (document.getElementById('longestSession')) {
+                        document.getElementById('longestSession').textContent = (longestSessionDuration / 60).toFixed(1);
                     }
+                }
+
+                // Resume stopwatch if it was running
+                if (isRunning) {
+                    stopwatchButton.textContent = 'End Session';
+                    stopwatchButton.classList.add('danger');
+                    stopwatchInterval = setInterval(() => {
+                        const now = new Date();
+                        const diffMinutes = Math.floor((now - startTime) / (1000 * 60));
+                        updateStopwatchDisplay(diffMinutes);
+                    }, 1000);
                 }
             } catch (error) {
                 console.error("Error loading stopwatch state:", error);
@@ -1430,15 +1437,50 @@
             await saveStopwatchState();
         });
 
-        // Add this function for editing longest session
+        // Add new function to update longest session
+        async function updateLongestSession(currentDuration) {
+            try {
+                const today = new Date().toISOString().split('T')[0];
+                const statsRef = doc(db, "dailyStats", today);
+                const statsDoc = await getDoc(statsRef);
+                
+                if (!statsDoc.exists() || currentDuration > (statsDoc.data().longestSession || 0)) {
+                    await setDoc(statsRef, {
+                        longestSession: currentDuration,
+                        lastUpdated: new Date().toISOString()
+                    }, { merge: true });
+                    
+                    // Update UI
+                    longestSessionDuration = currentDuration;
+                    if (document.getElementById('longestSession')) {
+                        document.getElementById('longestSession').textContent = (currentDuration / 60).toFixed(1);
+                    }
+                }
+            } catch (error) {
+                console.error("Error updating longest session:", error);
+            }
+        }
+
+        // Modify editLongestSession to update Firebase
         window.editLongestSession = async function() {
             const newDuration = prompt("Enter new longest session duration (in minutes):", longestSessionDuration);
             if (newDuration !== null) {
                 const duration = parseInt(newDuration);
                 if (!isNaN(duration) && duration >= 0) {
-                    longestSessionDuration = duration;
-                    document.getElementById('longestSession').textContent = (duration / 60).toFixed(1);
-                    await saveStopwatchState();
+                    try {
+                        const today = new Date().toISOString().split('T')[0];
+                        const statsRef = doc(db, "dailyStats", today);
+                        await setDoc(statsRef, {
+                            longestSession: duration,
+                            lastUpdated: new Date().toISOString()
+                        }, { merge: true });
+                        
+                        longestSessionDuration = duration;
+                        document.getElementById('longestSession').textContent = (duration / 60).toFixed(1);
+                    } catch (error) {
+                        console.error("Error updating longest session:", error);
+                        alert("Error saving the longest session. Please try again.");
+                    }
                 } else {
                     alert("Please enter a valid number of minutes.");
                 }
